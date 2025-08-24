@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "utility": "cpp",
+        "xutility": "cpp",
+        "algorithm": "cpp",
+        "limits": "cpp"
+    }
+}
