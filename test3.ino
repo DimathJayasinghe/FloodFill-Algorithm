@@ -67,8 +67,8 @@ struct Robot{
 
 
 // MOTOR CALIBRATION FACTORS
-float leftMotorFactor = 1.1;
-float rightMotorFactor = 1.1;
+float leftMotorFactor = 1.0;  // Keep one motor at 1.0 as reference
+float rightMotorFactor = 1.0;  // Adjust this one if needed to balance motors
 
 #define LEFT_TURN_SPEED 1.3
 
@@ -82,9 +82,6 @@ int SENSOR_OFFSET = 0;  // Add this define with your other constants
 float error = 0, lastError = 0;
 float P = 0, I = 0, D = 0;
 float PID_value = 0;
-
-
-
 
 
 
@@ -130,53 +127,38 @@ void calibrateSensors() {
   SENSOR_OFFSET = rightAvg - leftAvg;
 }
 
-void tunePID() {
-  I = 0;
-  int i=0;
-  while (i<100) {
-    if (isLeftWallDetected() && isRightWallDetected()) {
-      int leftDist = getLeftDistance();
-      int rightDist = getRightDistance();
-      
-      // Calculate error with offset
-      calibrateSensors();
-      error = (rightDist - leftDist) - SENSOR_OFFSET;
-      
-      // PID calculation
-      P = error;
-      I += error;
-      D = error - lastError;
-      lastError = error;
-      
-      I = constrain(I, -100, 100);
-      
-      PID_value = (Kp * P) + (Ki * I) + (Kd * D);
-      
-      // Output debugging info
-    //   Serial.print("Error: "); Serial.print(error);
-    //   Serial.print(" | PID: "); Serial.print(PID_value);
-    //   Serial.print(" | L: "); Serial.print(leftDist);
-    //   Serial.print(" | R: "); Serial.println(rightDist);
-      
-      // Apply to motors
-      int leftSpeed = BASE_SPEED * leftMotorFactor - PID_value;
-      int rightSpeed = BASE_SPEED * rightMotorFactor + PID_value;
-      
-      leftSpeed = constrain(leftSpeed, 0, 255);
-      rightSpeed = constrain(rightSpeed, 0, 255);
-      
-      digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-      digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-      analogWrite(ENA, leftSpeed);
-      analogWrite(ENB, rightSpeed);
-    } else {
-    //   Serial.println("Not enough walls for PID testing!");
-      break;
-    }
-    i++;
+// Calculate PID value based on current sensor readings
+float calculatePID() {
+  if (isLeftWallDetected() && isRightWallDetected()) {
+    int leftDist = getLeftDistance();
+    int rightDist = getRightDistance();
+    
+    // Calculate error with preset offset (don't recalibrate every time)
+    error = (rightDist - leftDist) - SENSOR_OFFSET;
+    
+    // Get time since last calculation for better derivative
+    static unsigned long lastTime = millis();
+    unsigned long currentTime = millis();
+    float deltaTime = (currentTime - lastTime) / 1000.0; // Convert to seconds
+    lastTime = currentTime;
+    
+    // Avoid division by zero
+    if (deltaTime < 0.001) deltaTime = 0.001;
+    
+    // PID calculation
+    P = error;
+    I += error * deltaTime; // Integral with time factor
+    D = (error - lastError) / deltaTime; // Derivative with time factor
+    lastError = error;
+    
+    // Prevent integral windup
+    I = constrain(I, -100, 100);
+    
+    // Calculate PID value
+    return (Kp * P) + (Ki * I) + (Kd * D);
   }
   
-  stopMotors();
+  return 0; // No walls detected to calculate PID
 }
 
 
@@ -204,36 +186,25 @@ void moveForward() {
   
   // Continue until we've moved the required amount of time
   while (currentTime - startTime < MOVE_TIME) {
-    // Only apply PID correction if both walls are present
+    // Calculate PID value if both walls are present
+    float pidValue = 0;
     if (isLeftWallDetected() && isRightWallDetected()) {
-      tunePID();
-      // Apply PID to motor speeds - positive PID means adjust toward left
-      int leftSpeed = BASE_SPEED * leftMotorFactor - PID_value;
-      int rightSpeed = BASE_SPEED * rightMotorFactor + PID_value;
-      
-      // Constrain speeds to valid range
-      leftSpeed = constrain(leftSpeed, 0, 255);
-      rightSpeed = constrain(rightSpeed, 0, 255);
-      
-      // Apply to motors
-      digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-      digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-      analogWrite(ENA, leftSpeed);
-      analogWrite(ENB, rightSpeed);
-    } 
-    else {
-      // No walls on both sides or can't determine, move straight
-      int leftSpeed = BASE_SPEED * leftMotorFactor;
-      int rightSpeed = BASE_SPEED * rightMotorFactor;
-      
-      leftSpeed = constrain(leftSpeed, 0, 255);
-      rightSpeed = constrain(rightSpeed, 0, 255);
-      
-      digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-      digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-      analogWrite(ENA, leftSpeed);
-      analogWrite(ENB, rightSpeed);
+      pidValue = calculatePID();
     }
+    
+    // Apply PID to motor speeds - positive PID means adjust toward left
+    int leftSpeed = BASE_SPEED - pidValue;
+    int rightSpeed = BASE_SPEED + pidValue;
+    
+    // Constrain speeds to valid range
+    leftSpeed = constrain(leftSpeed, 0, 255);
+    rightSpeed = constrain(rightSpeed, 0, 255);
+    
+    // Apply to motors
+    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+    analogWrite(ENA, leftSpeed);
+    analogWrite(ENB, rightSpeed);
     
     // Small delay for readings to stabilize
     delay(20);
@@ -303,35 +274,6 @@ void turnRight() {
   robot.dir = (robot.dir == NORTH) ? EAST : 
               (robot.dir == EAST) ? SOUTH : 
               (robot.dir == SOUTH) ? WEST : NORTH;
-}
-
-void tiltLeft() {
-    int leftSpeed = SLOW_SPEED * leftMotorFactor;
-    int rightSpeed = BASE_SPEED * rightMotorFactor;
-    
-    leftSpeed = constrain(leftSpeed, 0, 255);
-    rightSpeed = constrain(rightSpeed, 0, 255);
-    
-    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-    analogWrite(ENA, leftSpeed);
-    analogWrite(ENB, rightSpeed);
-    delay(MOVE_TIME / 2);
-    stopMotors();
-}
-void tiltRight() {
-    int leftSpeed = BASE_SPEED * leftMotorFactor;
-    int rightSpeed = SLOW_SPEED * rightMotorFactor;
-    
-    leftSpeed = constrain(leftSpeed, 0, 255);
-    rightSpeed = constrain(rightSpeed, 0, 255);
-    
-    digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
-    digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
-    analogWrite(ENA, leftSpeed);
-    analogWrite(ENB, rightSpeed);
-    delay(MOVE_TIME / 2);
-    stopMotors();
 }
 
 ////////////////////////////////////////
@@ -440,6 +382,11 @@ void setup(){
     setupMaze();
     setupRobot();
     delay(100);
+    
+    // Calibrate sensors once during setup
+    calibrateSensors();
+    Serial.println("Sensors calibrated with offset: " + String(SENSOR_OFFSET));
+    
     floodFill(TARGET);
 }
 
@@ -514,79 +461,8 @@ void doTheNextMove(){
     }
 }
 
-void printMatrix(){
-    for(int r=0;r<SIZE;r++){
-        for(int c=0;c<SIZE;c++){
-            Serial.print(maze[r][c].steps); Serial.print("\t");
-        }
-        Serial.println();
-    }
-    Serial.println();
-}
-
-// Add after your other functions
-void printPIDInfo() {
-  Serial.print("P=");
-  Serial.print(P);
-  Serial.print(" I=");
-  Serial.print(I);
-  Serial.print(" D=");
-  Serial.print(D);
-  Serial.print(" PID=");
-  Serial.println(PID_value);
-}
-
-
-// testing loop
-/**
- void loop() {
-   Serial.println("\nPress 't' to test PID, 'p', 'i', or 'd' to adjust values, 'c' to calibrate sensors");
-   
-   while (!Serial.available()) {
-     delay(100);
-   }
-   
-   char cmd = Serial.read();
-   
-   switch(cmd) {
-     case 't':
-       testPID();
-       break;
-     case 'p':
-       Kp += 0.05;
-       Serial.print("Kp increased to: "); Serial.println(Kp);
-       break;
-     case 'P':
-       Kp = max(0.00, Kp - 0.05);
-       Serial.print("Kp decreased to: "); Serial.println(Kp);
-       break;
-     case 'i':
-       Ki += 0.005;
-       Serial.print("Ki increased to: "); Serial.println(Ki);
-       break;
-     case 'I':
-       Ki = max(0.00, Ki - 0.005);
-       Serial.print("Ki decreased to: "); Serial.println(Ki);
-       break;
-     case 'd':
-       Kd += 0.05;
-       Serial.print("Kd increased to: "); Serial.println(Kd);
-       break;
-     case 'D':
-       Kd = max(0.00, Kd - 0.05);
-       Serial.print("Kd decreased to: "); Serial.println(Kd);
-       break;
-     case 'c':
-       calibrateSensors();
-       break;
-   }
- * 
-}
- */
-
 
 void loop(){
-    
     checkForWalls();
     setGoalToTarget();
     doTheNextMove();
